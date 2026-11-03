@@ -1,8 +1,18 @@
 const { discordRequest } = require("./discord");
 const messages = require("./messages");
 
-const delay = milliseconds =>
-  new Promise(resolve => setTimeout(resolve, milliseconds));
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function getTicketDetails(channel) {
+  const topic = channel.topic || "";
+
+  return {
+    ownerId: topic.match(/Ticket owner: (\d+)/)?.[1],
+    supportRoleId: topic.match(/Support role: (\d+)/)?.[1],
+    claimedBy: topic.match(/Claimed by: (\d+)/)?.[1],
+    status: topic.match(/Status: ([a-z]+)/)?.[1]
+  };
+}
 
 async function createTicketChannel(
   guildId,
@@ -15,68 +25,59 @@ async function createTicketChannel(
     .replace(/[^a-z0-9-]/g, "-")
     .slice(0, 90);
 
-  const permissionOverwrites = [
-    {
-      id: guildId,
-      type: 0,
-      deny: "1024"
-    },
-    {
-      id: userId,
-      type: 1,
-      allow: "3072"
-    }
-  ];
-
-  if (supportRoleId) {
-    permissionOverwrites.push({
-      id: supportRoleId,
-      type: 0,
-      allow: "3072"
-    });
-  }
-
   return discordRequest(`/guilds/${guildId}/channels`, {
     method: "POST",
     body: JSON.stringify({
       name: channelName,
       type: 0,
-      topic: `Ticket owner: ${userId} | Status: open`,
-      permission_overwrites: permissionOverwrites
+      topic:
+        `Ticket owner: ${userId} | ` +
+        `Support role: ${supportRoleId} | Status: open`,
+      permission_overwrites: [
+        {
+          id: guildId,
+          type: 0,
+          deny: "1024"
+        },
+        {
+          id: userId,
+          type: 1,
+          allow: "3072"
+        },
+        {
+          id: supportRoleId,
+          type: 0,
+          allow: "3072"
+        }
+      ]
     })
   });
 }
 
 async function createTranscript(channelId) {
-  let messagesList = [];
+  let collected = [];
   let before;
 
-  while (messagesList.length < 500) {
+  while (collected.length < 500) {
     const query = new URLSearchParams({ limit: "100" });
 
-    if (before) {
-      query.set("before", before);
-    }
+    if (before) query.set("before", before);
 
     const batch = await discordRequest(
       `/channels/${channelId}/messages?${query}`
     );
 
-    if (!batch.length) {
-      break;
-    }
+    if (!batch.length) break;
 
-    messagesList.push(...batch);
+    collected.push(...batch);
     before = batch[batch.length - 1].id;
 
-    if (batch.length < 100) {
-      break;
-    }
+    if (batch.length < 100) break;
   }
 
-  messagesList = messagesList.slice(0, 500).reverse();
+  collected = collected.slice(0, 500).reverse();
 
-  const transcriptLines = messagesList.map(message => {
+  const lines = collected.map(message => {
     const author = message.author?.username || "Unknown";
     const time = new Date(message.timestamp).toISOString();
     const content = message.content || "[No text content]";
@@ -92,31 +93,29 @@ async function createTranscript(channelId) {
 
   const header =
     `TICKET TRANSCRIPT\nChannel: ${channelId}\n` +
-    `Messages: ${messagesList.length}\n\n`;
+    `Messages: ${collected.length}\n\n`;
 
   const chunks = [];
-  let currentChunk = header;
+  let current = header;
 
-  for (const line of transcriptLines) {
-    if ((currentChunk + line + "\n").length > 1700) {
-      chunks.push(currentChunk);
-      currentChunk = "";
+  for (const line of lines) {
+    if ((current + line + "\n").length > 1700) {
+      chunks.push(current);
+      current = "";
     }
 
-    currentChunk += line + "\n";
+    current += line + "\n";
   }
 
-  if (currentChunk.trim()) {
-    chunks.push(currentChunk);
-  }
+  if (current.trim()) chunks.push(current);
 
-  for (let index = 0; index < chunks.length; index++) {
+  for (let i = 0; i < chunks.length; i++) {
     await discordRequest(`/channels/${channelId}/messages`, {
       method: "POST",
       body: JSON.stringify({
         content:
-          `📄 **Ticket transcript (part ${index + 1})**\n` +
-          `\`\`\`\n${chunks[index]}\n\`\`\``
+          `📄 **Ticket transcript (part ${i + 1})**\n` +
+          `\`\`\`\n${chunks[i]}\n\`\`\``
       })
     });
   }
@@ -124,29 +123,32 @@ async function createTranscript(channelId) {
 
 async function closeTicketChannel(channelId) {
   const channel = await discordRequest(`/channels/${channelId}`);
+  const details = getTicketDetails(channel);
 
-  const ownerId = channel.topic?.match(
-    /Ticket owner: (\d+)/
-  )?.[1];
-
-  if (!ownerId) {
+  if (!details.ownerId) {
     throw new Error("Ticket owner could not be found.");
   }
 
-  if (!channel.topic.includes("Status: open")) {
+  if (details.status !== "open") {
     throw new Error("This ticket is already closed.");
   }
 
-  // Save the transcript before sending the closing message.
-  await createTranscript(channelId);
-
-  // Mark the ticket as closed to prevent another close request.
+  // Mark it closed first to prevent duplicate close requests.
   await discordRequest(`/channels/${channelId}`, {
     method: "PATCH",
     body: JSON.stringify({
-      topic: `Ticket owner: ${ownerId} | Status: closed`
+      topic:
+        `Ticket owner: ${details.ownerId} | ` +
+        `Support role: ${details.supportRoleId || ""} | Status: closed`
     })
   });
+
+  // Save the transcript before the closing message.
+  try {
+    await createTranscript(channelId);
+  } catch (error) {
+    console.error("Transcript creation failed:", error);
+  }
 
   // Send the approved closing message.
   await discordRequest(`/channels/${channelId}/messages`, {
@@ -156,7 +158,7 @@ async function closeTicketChannel(channelId) {
     })
   });
 
-  // Keep the channel available for 30 seconds.
+  // Keep the ticket open for 30 seconds after the message.
   await delay(30000);
 
   // Permanently delete the ticket channel.
@@ -167,13 +169,14 @@ async function closeTicketChannel(channelId) {
 
 async function claimTicketChannel(channelId, staffId) {
   const channel = await discordRequest(`/channels/${channelId}`);
+  const details = getTicketDetails(channel);
 
-  if (!channel.topic?.includes("Status: open")) {
+  if (details.status !== "open") {
     throw new Error("This ticket is not open.");
   }
 
-  if (channel.topic.includes("Claimed by:")) {
-    throw new Error("This ticket has already been claimed.");
+  if (details.claimedBy) {
+    throw new Error("This ticket is already claimed.");
   }
 
   return discordRequest(`/channels/${channelId}`, {
@@ -207,12 +210,6 @@ async function removeTicketMember(channelId, userId) {
   );
 }
 
-async function deleteTicketChannel(channelId) {
-  return discordRequest(`/channels/${channelId}`, {
-    method: "DELETE"
-  });
-}
-
 module.exports = {
   createTicketChannel,
   createTranscript,
@@ -220,5 +217,5 @@ module.exports = {
   claimTicketChannel,
   addTicketMember,
   removeTicketMember,
-  deleteTicketChannel
+  getTicketDetails
 };
