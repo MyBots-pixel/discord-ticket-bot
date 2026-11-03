@@ -1,4 +1,5 @@
 const { verifyKey } = require("discord-interactions");
+const { handleInteraction } = require("../src/handlers/interactions");
 
 module.exports = async (req, res) => {
   if (req.method !== "POST") {
@@ -13,37 +14,25 @@ module.exports = async (req, res) => {
     }
 
     const rawBody = Buffer.concat(chunks);
-    const signature = req.headers["x-signature-ed25519"];
-    const timestamp = req.headers["x-signature-timestamp"];
 
-    const isValid = await verifyKey(
+    const valid = await verifyKey(
       rawBody,
-      signature,
-      timestamp,
+      req.headers["x-signature-ed25519"],
+      req.headers["x-signature-timestamp"],
       process.env.DISCORD_PUBLIC_KEY
     );
 
-    if (!isValid) {
-      return res.status(401).send("Invalid request signature");
+    if (!valid) {
+      return res.status(401).send("Invalid signature");
     }
 
     const interaction = JSON.parse(rawBody.toString("utf8"));
+    const response = await handleInteraction(interaction);
 
-    // Discord checks that the bot endpoint is working.
-    if (interaction.type === 1) {
-      return res.status(200).json({ type: 1 });
-    }
-
-    return res.status(200).json({
-      type: 4,
-      data: {
-        content: "The ticket bot is online!",
-        flags: 64
-      }
-    });
+    return res.status(200).json(response);
 
   } catch (error) {
-    console.error("Discord interaction error:", error);
+    console.error(error);
     return res.status(500).send("Internal server error");
   }
 };
