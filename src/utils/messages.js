@@ -43,7 +43,14 @@ Support Staff,
     `<@${memberId}> Has Been Removed`,
 
   ticketAlreadyClaimed: staffId =>
-    `This Ticket Is Already Claimed By <@${staffId}>`
+    `This Ticket Is Already Claimed By <@${staffId}>`,
+
+  notTicket: "This Channel Isn't A Ticket Channel. Error",
+
+  staffPermission: "Only Approved Staff Can Use That. Ooops.",
+
+  memberNotInTicket:
+    "That Person Isn't In This Ticket Currently. Error"
 };
 
 module.exports = messages;
