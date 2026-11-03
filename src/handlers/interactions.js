@@ -1,4 +1,5 @@
 const { discordRequest } = require("../utils/discord");
+const messages = require("../utils/messages");
 
 const {
   createTicketChannel,
@@ -8,6 +9,44 @@ const {
   removeTicketMember
 } = require("../utils/tickets");
 
+function response(content, ephemeral = true, components = []) {
+  return {
+    type: 4,
+    data: {
+      content,
+      flags: ephemeral ? 64 : 0,
+      components
+    }
+  };
+}
+
+function getUserId(interaction) {
+  return interaction.member?.user?.id || interaction.user?.id;
+}
+
+function isStaff(interaction) {
+  const permissions = BigInt(
+    interaction.member?.permissions || "0"
+  );
+
+  return (permissions & 16n) !== 0n;
+}
+
+function getOption(interaction, name) {
+  return interaction.data.options?.find(
+    option => option.name === name
+  )?.value;
+}
+
+function buttonRow(buttons) {
+  return [
+    {
+      type: 1,
+      components: buttons
+    }
+  ];
+}
+
 async function handleInteraction(interaction) {
   try {
     if (interaction.type === 1) {
@@ -16,26 +55,34 @@ async function handleInteraction(interaction) {
 
     if (interaction.type === 2) {
       const command = interaction.data.name;
-      const userId = interaction.member.user.id;
+      const userId = getUserId(interaction);
       const channelId = interaction.channel_id;
 
       if (command === "ping") {
-        return {
-          type: 4,
-          data: {
-            content: "Pong! 🏓 The ticket bot is online!",
-            flags: 64
-          }
-        };
+        return response("Pong! 🏓 The ticket bot is online!");
       }
 
       if (command === "setup") {
-        const selectedChannel = interaction.data.options?.find(
-          option => option.name === "channel"
-        )?.value;
+        if (!isStaff(interaction)) {
+          throw new Error(
+            "You need Manage Channels permission to set up tickets."
+          );
+        }
 
-        if (!selectedChannel) {
-          throw new Error("Please select a channel.");
+        const selectedChannel = getOption(
+          interaction,
+          "channel"
+        );
+
+        const supportRoleId = getOption(
+          interaction,
+          "staff_role"
+        );
+
+        if (!selectedChannel || !supportRoleId) {
+          throw new Error(
+            "Please select a channel and Support Staff role."
+          );
         }
 
         await discordRequest(
@@ -43,64 +90,74 @@ async function handleInteraction(interaction) {
           {
             method: "POST",
             body: JSON.stringify({
-              content:
-                "🎫 **Support Tickets**\n\nNeed help? Click below to open a private support ticket.",
-              components: [
+              embeds: [
                 {
-                  type: 1,
-                  components: [
-                    {
-                      type: 2,
-                      style: 1,
-                      label: "Create Ticket",
-                      custom_id: "create_ticket"
-                    }
-                  ]
+                  title: messages.ticketPanel.title,
+                  description: messages.ticketPanel.description,
+                  color: 3447003
                 }
-              ]
+              ],
+              components: buttonRow([
+                {
+                  type: 2,
+                  style: 1,
+                  label: messages.ticketPanel.button,
+                  custom_id: `create_ticket:${supportRoleId}`
+                }
+              ])
             })
           }
         );
 
-        return {
-          type: 4,
-          data: {
-            content: "Your ticket panel has been created!",
-            flags: 64
-          }
-        };
+        return response(
+          "Your ticket panel has been created!"
+        );
       }
 
-      const permissions = BigInt(
-        interaction.member.permissions || "0"
-      );
-
-      const isStaff = (permissions & 16n) !== 0n;
-
       if (command === "claim") {
-        if (!isStaff) {
-          throw new Error("You need Manage Channels permission.");
+        if (!isStaff(interaction)) {
+          throw new Error(
+            "You need Manage Channels permission."
+          );
+        }
+
+        const channel = await discordRequest(
+          `/channels/${channelId}`
+        );
+
+        const previousClaim = channel.topic?.match(
+          /Claimed by: (\d+)/
+        )?.[1];
+
+        if (previousClaim) {
+          return response(
+            messages.ticketAlreadyClaimed(previousClaim)
+          );
         }
 
         await claimTicketChannel(channelId, userId);
 
-        return {
-          type: 4,
-          data: {
-            content: "✅ You have claimed this ticket!",
-            flags: 64
+        await discordRequest(
+          `/channels/${channelId}/messages`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              content: messages.ticketClaimed(userId)
+            })
           }
-        };
+        );
+
+        return response("You have claimed this ticket!");
       }
 
       if (command === "add") {
-        if (!isStaff) {
-          throw new Error("You need Manage Channels permission.");
+        if (!isStaff(interaction)) {
+          throw new Error(
+            "You need Manage Channels permission."
+          );
         }
 
-        const targetUser = interaction.data.options?.find(
-          option => option.name === "user"
-        )?.value;
+        const targetUser = getOption(interaction, "user");
 
         if (!targetUser) {
           throw new Error("Please select a member.");
@@ -108,37 +165,88 @@ async function handleInteraction(interaction) {
 
         await addTicketMember(channelId, targetUser);
 
-        return {
-          type: 4,
-          data: {
-            content: `✅ <@${targetUser}> has been added to this ticket.`,
-            flags: 64
+        await discordRequest(
+          `/channels/${channelId}/messages`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              content: messages.memberAdded(
+                userId,
+                targetUser
+              )
+            })
           }
-        };
+        );
+
+        return response("Member added to the ticket.");
       }
 
       if (command === "remove") {
-        if (!isStaff) {
-          throw new Error("You need Manage Channels permission.");
+        if (!isStaff(interaction)) {
+          throw new Error(
+            "You need Manage Channels permission."
+          );
         }
 
-        const targetUser = interaction.data.options?.find(
-          option => option.name === "user"
-        )?.value;
+        const targetUser = getOption(interaction, "user");
 
         if (!targetUser) {
           throw new Error("Please select a member.");
         }
 
-        await removeTicketMember(channelId, targetUser);
+        const channel = await discordRequest(
+          `/channels/${channelId}`
+        );
 
-        return {
-          type: 4,
-          data: {
-            content: `✅ <@${targetUser}> has been removed from this ticket.`,
-            flags: 64
+        const ownerId = channel.topic?.match(
+          /Ticket owner: (\d+)/
+        )?.[1];
+
+        if (!ownerId) {
+          throw new Error(
+            "This channel is not a ticket."
+          );
+        }
+
+        if (targetUser === ownerId) {
+          throw new Error(
+            "The ticket owner cannot be removed from their own ticket."
+          );
+        }
+
+        const customId =
+          `remove_member:${ownerId}:${userId}:${targetUser}`;
+
+        await discordRequest(
+          `/channels/${channelId}/messages`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              content: messages.removeMemberConfirmation(
+                userId,
+                targetUser
+              ),
+              components: buttonRow([
+                {
+                  type: 2,
+                  style: 3,
+                  label: "Confirm",
+                  custom_id: `${customId}:confirm`
+                },
+                {
+                  type: 2,
+                  style: 4,
+                  label: "Deny",
+                  custom_id: `${customId}:deny`
+                }
+              ])
+            })
           }
-        };
+        );
+
+        return response(
+          "The removal request has been sent to the ticket owner."
+        );
       }
 
       if (command === "close") {
@@ -146,62 +254,59 @@ async function handleInteraction(interaction) {
           `/channels/${channelId}`
         );
 
-        const isTicket = channel.topic?.includes("Ticket owner:");
-
-        if (!isTicket) {
-          throw new Error("This channel is not a ticket.");
-        }
-
-        const ownerId = channel.topic.match(
+        const ownerId = channel.topic?.match(
           /Ticket owner: (\d+)/
         )?.[1];
 
-        if (!isStaff && ownerId !== userId) {
-          throw new Error("Only the ticket owner or staff can close it.");
+        if (!ownerId) {
+          throw new Error(
+            "This channel is not a ticket."
+          );
+        }
+
+        if (!isStaff(interaction) && ownerId !== userId) {
+          throw new Error(
+            "Only the ticket owner or staff can close this ticket."
+          );
         }
 
         await closeTicketChannel(channelId);
 
-        return {
-          type: 4,
-          data: {
-            content: "🔒 This ticket has been closed.",
-            flags: 64
-          }
-        };
+        return response("Ticket closed successfully.");
       }
     }
 
     if (interaction.type === 3) {
-      const button = interaction.data.custom_id;
+      const customId = interaction.data.custom_id;
+      const userId = getUserId(interaction);
       const guildId = interaction.guild_id;
-      const userId = interaction.member.user.id;
-      const username = interaction.member.user.username;
+      const channelId = interaction.channel_id;
 
-      if (button === "create_ticket") {
+      if (customId.startsWith("create_ticket:")) {
+        const supportRoleId = customId.split(":")[1];
+
         const channels = await discordRequest(
           `/guilds/${guildId}/channels`
         );
 
         const existingTicket = channels.find(channel =>
-          channel.topic?.includes(`Ticket owner: ${userId}`) &&
+          channel.topic?.includes(
+            `Ticket owner: ${userId}`
+          ) &&
           channel.topic?.includes("Status: open")
         );
 
         if (existingTicket) {
-          return {
-            type: 4,
-            data: {
-              content: `You already have an open ticket: <#${existingTicket.id}>`,
-              flags: 64
-            }
-          };
+          return response(
+            `You already have an open ticket: <#${existingTicket.id}>`
+          );
         }
 
         const ticket = await createTicketChannel(
           guildId,
           userId,
-          username
+          interaction.member.user.username,
+          supportRoleId
         );
 
         await discordRequest(
@@ -209,83 +314,156 @@ async function handleInteraction(interaction) {
           {
             method: "POST",
             body: JSON.stringify({
-              content:
-                `👋 Welcome <@${userId}>!\n\nA member of staff will be with you shortly.`,
-              components: [
+              content: messages.ticketWelcome(
+                userId,
+                supportRoleId
+              ),
+              allowed_mentions: {
+                users: [userId],
+                roles: [supportRoleId]
+              },
+              components: buttonRow([
                 {
-                  type: 1,
-                  components: [
-                    {
-                      type: 2,
-                      style: 4,
-                      label: "Close Ticket",
-                      custom_id: "close_ticket"
-                    }
-                  ]
+                  type: 2,
+                  style: 4,
+                  label: "Close Ticket",
+                  custom_id: "close_ticket"
                 }
-              ]
+              ])
             })
           }
         );
 
-        return {
-          type: 4,
-          data: {
-            content: `✅ Your ticket has been created: <#${ticket.id}>`,
-            flags: 64
+        await discordRequest(
+          `/channels/${ticket.id}/messages`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              content: messages.staffNotification(
+                userId,
+                ticket.id
+              )
+            })
           }
-        };
+        );
+
+        return response(
+          `Your ticket has been created: <#${ticket.id}>`
+        );
       }
 
-      if (button === "close_ticket") {
+      if (customId.startsWith("remove_member:")) {
+        const parts = customId.split(":");
+        const ownerId = parts[1];
+        const staffId = parts[2];
+        const targetUserId = parts[3];
+        const decision = parts[4];
+
+        if (userId !== ownerId) {
+          return response(
+            "Only the ticket owner can make this decision."
+          );
+        }
+
+        await discordRequest(
+          `/channels/${channelId}/messages/${interaction.data.message.id}`,
+          {
+            method: "PATCH",
+            body: JSON.stringify({
+              components: []
+            })
+          }
+        );
+
+        if (decision === "deny") {
+          await discordRequest(
+            `/channels/${channelId}/messages`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                content: messages.removeMemberDenied(
+                  userId,
+                  targetUserId
+                )
+              })
+            }
+          );
+
+          return {
+            type: 6
+          };
+        }
+
+        if (decision === "confirm") {
+          await discordRequest(
+            `/channels/${channelId}/messages`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                content: messages.removeMemberConfirmed(
+                  userId,
+                  staffId,
+                  targetUserId
+                )
+              })
+            }
+          );
+
+          await removeTicketMember(
+            channelId,
+            targetUserId
+          );
+
+          await discordRequest(
+            `/channels/${channelId}/messages`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                content: messages.memberRemoved(
+                  targetUserId
+                )
+              })
+            }
+          );
+
+          return {
+            type: 6
+          };
+        }
+      }
+
+      if (customId === "close_ticket") {
         const channel = await discordRequest(
-          `/channels/${interaction.channel_id}`
+          `/channels/${channelId}`
         );
 
         const ownerId = channel.topic?.match(
           /Ticket owner: (\d+)/
         )?.[1];
 
-        const permissions = BigInt(
-          interaction.member.permissions || "0"
-        );
-
-        const isStaff = (permissions & 16n) !== 0n;
-
-        if (ownerId !== userId && !isStaff) {
-          throw new Error("You cannot close someone else's ticket.");
+        if (
+          ownerId !== userId &&
+          !isStaff(interaction)
+        ) {
+          throw new Error(
+            "You cannot close someone else's ticket."
+          );
         }
 
-        await closeTicketChannel(interaction.channel_id);
+        await closeTicketChannel(channelId);
 
-        return {
-          type: 4,
-          data: {
-            content: "🔒 Ticket closed successfully.",
-            flags: 64
-          }
-        };
+        return response("Ticket closed successfully.");
       }
     }
 
-    return {
-      type: 4,
-      data: {
-        content: "Unknown interaction.",
-        flags: 64
-      }
-    };
+    return response("Unknown interaction.");
 
   } catch (error) {
     console.error("Interaction error:", error);
 
-    return {
-      type: 4,
-      data: {
-        content: `❌ ${error.message || "Something went wrong."}`,
-        flags: 64
-      }
-    };
+    return response(
+      `❌ ${error.message || "Something went wrong."}`
+    );
   }
 }
 
