@@ -38,7 +38,48 @@ async function closeTicketChannel(channelId) {
   });
 }
 
+async function claimTicketChannel(channelId, staffId) {
+  const channel = await discordRequest(`/channels/${channelId}`);
+
+  if (!channel.topic?.includes("Ticket owner:")) {
+    throw new Error("This is not an open ticket.");
+  }
+
+  return discordRequest(`/channels/${channelId}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      topic: `${channel.topic} | Claimed by: ${staffId}`
+    })
+  });
+}
+
+async function addTicketMember(channelId, userId) {
+  return discordRequest(
+    `/channels/${channelId}/permissions/${userId}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        type: 1,
+        allow: "3072",
+        deny: "0"
+      })
+    }
+  );
+}
+
+async function removeTicketMember(channelId, userId) {
+  return discordRequest(
+    `/channels/${channelId}/permissions/${userId}`,
+    {
+      method: "DELETE"
+    }
+  );
+}
+
 module.exports = {
   createTicketChannel,
-  closeTicketChannel
+  closeTicketChannel,
+  claimTicketChannel,
+  addTicketMember,
+  removeTicketMember
 };
