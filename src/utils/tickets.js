@@ -1,4 +1,8 @@
 const { discordRequest } = require("./discord");
+const messages = require("./messages");
+
+const delay = milliseconds =>
+  new Promise(resolve => setTimeout(resolve, milliseconds));
 
 async function createTicketChannel(
   guildId,
@@ -44,10 +48,10 @@ async function createTicketChannel(
 }
 
 async function createTranscript(channelId) {
-  let messages = [];
+  let messagesList = [];
   let before;
 
-  while (messages.length < 500) {
+  while (messagesList.length < 500) {
     const query = new URLSearchParams({ limit: "100" });
 
     if (before) {
@@ -62,7 +66,7 @@ async function createTranscript(channelId) {
       break;
     }
 
-    messages.push(...batch);
+    messagesList.push(...batch);
     before = batch[batch.length - 1].id;
 
     if (batch.length < 100) {
@@ -70,9 +74,9 @@ async function createTranscript(channelId) {
     }
   }
 
-  messages = messages.slice(0, 500).reverse();
+  messagesList = messagesList.slice(0, 500).reverse();
 
-  const transcriptLines = messages.map(message => {
+  const transcriptLines = messagesList.map(message => {
     const author = message.author?.username || "Unknown";
     const time = new Date(message.timestamp).toISOString();
     const content = message.content || "[No text content]";
@@ -88,13 +92,13 @@ async function createTranscript(channelId) {
 
   const header =
     `TICKET TRANSCRIPT\nChannel: ${channelId}\n` +
-    `Messages: ${messages.length}\n\n`;
+    `Messages: ${messagesList.length}\n\n`;
 
   const chunks = [];
   let currentChunk = header;
 
   for (const line of transcriptLines) {
-    if ((currentChunk + line + "\n").length > 1800) {
+    if ((currentChunk + line + "\n").length > 1700) {
       chunks.push(currentChunk);
       currentChunk = "";
     }
@@ -133,26 +137,31 @@ async function closeTicketChannel(channelId) {
     throw new Error("This ticket is already closed.");
   }
 
+  // Save the transcript before sending the closing message.
   await createTranscript(channelId);
 
-  await discordRequest(
-    `/channels/${channelId}/permissions/${ownerId}`,
-    {
-      method: "PUT",
-      body: JSON.stringify({
-        type: 1,
-        allow: "1024",
-        deny: "2048"
-      })
-    }
-  );
-
-  return discordRequest(`/channels/${channelId}`, {
+  // Mark the ticket as closed to prevent another close request.
+  await discordRequest(`/channels/${channelId}`, {
     method: "PATCH",
     body: JSON.stringify({
-      name: `closed-${channel.name}`.slice(0, 100),
       topic: `Ticket owner: ${ownerId} | Status: closed`
     })
+  });
+
+  // Send the approved closing message.
+  await discordRequest(`/channels/${channelId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({
+      content: messages.ticketClosed
+    })
+  });
+
+  // Keep the channel available for 30 seconds.
+  await delay(30000);
+
+  // Permanently delete the ticket channel.
+  return discordRequest(`/channels/${channelId}`, {
+    method: "DELETE"
   });
 }
 
