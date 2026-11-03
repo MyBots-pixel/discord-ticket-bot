@@ -1,4 +1,3 @@
-
 const { verifyKey } = require("discord-interactions");
 const { handleInteraction } = require("../src/handlers/interactions");
 
