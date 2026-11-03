@@ -10,18 +10,15 @@ const {
 
 async function handleInteraction(interaction) {
   try {
-    // Discord endpoint verification
     if (interaction.type === 1) {
       return { type: 1 };
     }
 
-    // Slash commands
     if (interaction.type === 2) {
       const command = interaction.data.name;
       const userId = interaction.member.user.id;
       const channelId = interaction.channel_id;
 
-      // Ping command
       if (command === "ping") {
         return {
           type: 4,
@@ -32,7 +29,6 @@ async function handleInteraction(interaction) {
         };
       }
 
-      // Setup command
       if (command === "setup") {
         const selectedChannel = interaction.data.options?.find(
           option => option.name === "channel"
@@ -75,14 +71,12 @@ async function handleInteraction(interaction) {
         };
       }
 
-      // Staff permission check
       const permissions = BigInt(
         interaction.member.permissions || "0"
       );
 
       const isStaff = (permissions & 16n) !== 0n;
 
-      // Claim command
       if (command === "claim") {
         if (!isStaff) {
           throw new Error("You need Manage Channels permission.");
@@ -99,7 +93,6 @@ async function handleInteraction(interaction) {
         };
       }
 
-      // Add member command
       if (command === "add") {
         if (!isStaff) {
           throw new Error("You need Manage Channels permission.");
@@ -124,7 +117,6 @@ async function handleInteraction(interaction) {
         };
       }
 
-      // Remove member command
       if (command === "remove") {
         if (!isStaff) {
           throw new Error("You need Manage Channels permission.");
@@ -149,7 +141,6 @@ async function handleInteraction(interaction) {
         };
       }
 
-      // Close command
       if (command === "close") {
         const channel = await discordRequest(
           `/channels/${channelId}`
@@ -181,21 +172,20 @@ async function handleInteraction(interaction) {
       }
     }
 
-    // Button interactions
     if (interaction.type === 3) {
       const button = interaction.data.custom_id;
       const guildId = interaction.guild_id;
       const userId = interaction.member.user.id;
       const username = interaction.member.user.username;
 
-      // Create ticket button
       if (button === "create_ticket") {
         const channels = await discordRequest(
           `/guilds/${guildId}/channels`
         );
 
         const existingTicket = channels.find(channel =>
-          channel.topic?.startsWith(`Ticket owner: ${userId}`)
+          channel.topic?.includes(`Ticket owner: ${userId}`) &&
+          channel.topic?.includes("Status: open")
         );
 
         if (existingTicket) {
@@ -247,7 +237,6 @@ async function handleInteraction(interaction) {
         };
       }
 
-      // Close ticket button
       if (button === "close_ticket") {
         const channel = await discordRequest(
           `/channels/${interaction.channel_id}`
