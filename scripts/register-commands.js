@@ -1,4 +1,5 @@
 const setupCommand = require("../src/commands/setup");
+const ticketCommands = require("../src/commands/ticket");
 
 const commands = [
   {
@@ -6,10 +7,7 @@ const commands = [
     description: "Check if the bot is online"
   },
   setupCommand,
-  {
-    name: "close",
-    description: "Close the current ticket"
-  }
+  ...ticketCommands
 ];
 
 async function registerCommands() {
@@ -39,7 +37,7 @@ async function registerCommands() {
     throw new Error(JSON.stringify(result));
   }
 
-  console.log("Discord commands registered successfully!");
+  console.log("All commands registered successfully!");
 }
 
 registerCommands().catch(console.error);
