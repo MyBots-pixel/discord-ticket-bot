@@ -5,7 +5,8 @@
   "private": true,
   "main": "api/interactions.js",
   "scripts": {
-    "register": "node scripts/register-commands.js"
+    "register": "node scripts/register-commands.js",
+    "vercel-build": "npm run register"
   },
   "dependencies": {
     "discord-interactions": "^4.3.0"
