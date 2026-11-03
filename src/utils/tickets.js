@@ -1,10 +1,36 @@
 const { discordRequest } = require("./discord");
 
-async function createTicketChannel(guildId, userId, username) {
+async function createTicketChannel(
+  guildId,
+  userId,
+  username,
+  supportRoleId
+) {
   const channelName = `ticket-${username}`
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, "-")
     .slice(0, 90);
+
+  const permissionOverwrites = [
+    {
+      id: guildId,
+      type: 0,
+      deny: "1024"
+    },
+    {
+      id: userId,
+      type: 1,
+      allow: "3072"
+    }
+  ];
+
+  if (supportRoleId) {
+    permissionOverwrites.push({
+      id: supportRoleId,
+      type: 0,
+      allow: "3072"
+    });
+  }
 
   return discordRequest(`/guilds/${guildId}/channels`, {
     method: "POST",
@@ -12,18 +38,7 @@ async function createTicketChannel(guildId, userId, username) {
       name: channelName,
       type: 0,
       topic: `Ticket owner: ${userId} | Status: open`,
-      permission_overwrites: [
-        {
-          id: guildId,
-          type: 0,
-          deny: "1024"
-        },
-        {
-          id: userId,
-          type: 1,
-          allow: "3072"
-        }
-      ]
+      permission_overwrites: permissionOverwrites
     })
   });
 }
@@ -32,29 +47,32 @@ async function createTranscript(channelId) {
   let messages = [];
   let before;
 
-  // Retrieve up to 500 messages.
   while (messages.length < 500) {
     const query = new URLSearchParams({ limit: "100" });
 
-    if (before) query.set("before", before);
+    if (before) {
+      query.set("before", before);
+    }
 
     const batch = await discordRequest(
       `/channels/${channelId}/messages?${query}`
     );
 
-    if (!batch.length) break;
+    if (!batch.length) {
+      break;
+    }
 
     messages.push(...batch);
     before = batch[batch.length - 1].id;
 
-    if (batch.length < 100) break;
+    if (batch.length < 100) {
+      break;
+    }
   }
 
-  messages = messages
-    .slice(0, 500)
-    .reverse();
+  messages = messages.slice(0, 500).reverse();
 
-  const transcript = messages.map(message => {
+  const transcriptLines = messages.map(message => {
     const author = message.author?.username || "Unknown";
     const time = new Date(message.timestamp).toISOString();
     const content = message.content || "[No text content]";
@@ -63,35 +81,38 @@ async function createTranscript(channelId) {
       .map(file => file.url)
       .join("\n");
 
-    return `[${time}] ${author}: ${content}${attachments ? `\nAttachments: ${attachments}` : ""}`;
+    return `[${time}] ${author}: ${content}${
+      attachments ? `\nAttachments: ${attachments}` : ""
+    }`;
   });
 
-  const header = `TICKET TRANSCRIPT\nChannel: ${channelId}\nMessages: ${messages.length}\n\n`;
+  const header =
+    `TICKET TRANSCRIPT\nChannel: ${channelId}\n` +
+    `Messages: ${messages.length}\n\n`;
 
-  let text = header;
-  let part = 1;
+  const chunks = [];
+  let currentChunk = header;
 
-  for (const line of transcript) {
-    if ((text + line + "\n").length > 1900) {
-      await discordRequest(`/channels/${channelId}/messages`, {
-        method: "POST",
-        body: JSON.stringify({
-          content: `📄 **Ticket transcript (part ${part})**\n\`\`\`\n${text}\n\`\`\``
-        })
-      });
-
-      part++;
-      text = "";
+  for (const line of transcriptLines) {
+    if ((currentChunk + line + "\n").length > 1800) {
+      chunks.push(currentChunk);
+      currentChunk = "";
     }
 
-    text += line + "\n";
+    currentChunk += line + "\n";
   }
 
-  if (text.trim()) {
+  if (currentChunk.trim()) {
+    chunks.push(currentChunk);
+  }
+
+  for (let index = 0; index < chunks.length; index++) {
     await discordRequest(`/channels/${channelId}/messages`, {
       method: "POST",
       body: JSON.stringify({
-        content: `📄 **Ticket transcript (part ${part})**\n\`\`\`\n${text}\n\`\`\``
+        content:
+          `📄 **Ticket transcript (part ${index + 1})**\n` +
+          `\`\`\`\n${chunks[index]}\n\`\`\``
       })
     });
   }
@@ -177,10 +198,18 @@ async function removeTicketMember(channelId, userId) {
   );
 }
 
+async function deleteTicketChannel(channelId) {
+  return discordRequest(`/channels/${channelId}`, {
+    method: "DELETE"
+  });
+}
+
 module.exports = {
   createTicketChannel,
+  createTranscript,
   closeTicketChannel,
   claimTicketChannel,
   addTicketMember,
-  removeTicketMember
+  removeTicketMember,
+  deleteTicketChannel
 };
