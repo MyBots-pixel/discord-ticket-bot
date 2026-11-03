@@ -1,10 +1,12 @@
 {
   "name": "discord-ticket-bot",
   "version": "1.0.0",
-  "description": "A Discord ticket management bot",
+  "description": "A fully featured Discord ticket management bot",
+  "private": true,
   "main": "api/interactions.js",
   "scripts": {
-    "start": "node api/interactions.js"
+    "start": "node api/interactions.js",
+    "register": "node scripts/register-commands.js"
   },
   "dependencies": {
     "discord-interactions": "^4.3.0"
