@@ -11,7 +11,7 @@ async function createTicketChannel(guildId, userId, username) {
     body: JSON.stringify({
       name: channelName,
       type: 0,
-      topic: `Ticket owner: ${userId}`,
+      topic: `Ticket owner: ${userId} | Status: open`,
       permission_overwrites: [
         {
           id: guildId,
@@ -29,11 +29,33 @@ async function createTicketChannel(guildId, userId, username) {
 }
 
 async function closeTicketChannel(channelId) {
+  const channel = await discordRequest(`/channels/${channelId}`);
+
+  const ownerId = channel.topic?.match(
+    /Ticket owner: (\d+)/
+  )?.[1];
+
+  if (!ownerId) {
+    throw new Error("Ticket owner could not be found.");
+  }
+
+  await discordRequest(
+    `/channels/${channelId}/permissions/${ownerId}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        type: 1,
+        allow: "1024",
+        deny: "2048"
+      })
+    }
+  );
+
   return discordRequest(`/channels/${channelId}`, {
     method: "PATCH",
     body: JSON.stringify({
-      name: "closed-ticket",
-      topic: "This ticket has been closed."
+      name: `closed-${channel.name}`.slice(0, 100),
+      topic: `Ticket owner: ${ownerId} | Status: closed`
     })
   });
 }
@@ -41,8 +63,8 @@ async function closeTicketChannel(channelId) {
 async function claimTicketChannel(channelId, staffId) {
   const channel = await discordRequest(`/channels/${channelId}`);
 
-  if (!channel.topic?.includes("Ticket owner:")) {
-    throw new Error("This is not an open ticket.");
+  if (!channel.topic?.includes("Status: open")) {
+    throw new Error("This ticket is not open.");
   }
 
   return discordRequest(`/channels/${channelId}`, {
